@@ -34,12 +34,11 @@ cd obs-deepgram-poc
 git submodule update --init --recursive
 ```
 
-Go back to the plugins directory and edit the `CMakeLists.txt` file,
-adding the following line to the bottom of the file:
+Add the line `add_subdirectory(obs-deepgram-poc)` to the end of the `CMakeLists.txt` file
+in the plugins directory:
 
 ```
-cd ..
-add_subdirectory(obs-deepgram-poc)
+echo "add_subdirectory(obs-deepgram-poc)" >> ../CMakeLists.txt
 ```
 
 Build by going to the root `obs-studio` directory and running:
