@@ -30,7 +30,8 @@ include_directories(
 
 add_library(obs-deepgram-poc MODULE
       obs-deepgram-poc.cpp
-      obs-deepgram-poc-source.cpp)
+      obs-deepgram-poc-source.cpp
+      WebsocketEndpoint.hpp)
 
 target_link_libraries(obs-deepgram-poc
       libobs
