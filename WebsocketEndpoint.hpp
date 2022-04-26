@@ -52,9 +52,7 @@ public:
     void on_message(websocketpp::connection_hdl, client::message_ptr msg) {
         if (msg->get_opcode() == websocketpp::frame::opcode::text) {
     		blog(LOG_WARNING, "%s", msg->get_payload().c_str());
-            m_messages.push_back("<< " + msg->get_payload());
-        } else {
-            m_messages.push_back("<< " + websocketpp::utility::to_hex(msg->get_payload()));
+            m_messages.push_back(msg->get_payload());
         }
     }
 
@@ -70,9 +68,16 @@ public:
         return m_status;
     }
 
-    void record_sent_message(std::string message) {
-        m_messages.push_back(">> " + message);
+    // wrap this in a mutex
+    std::vector<std::string> get_messages() {
+        std::vector<std::string> copy = m_messages;
+        m_messages.clear();
+        return copy;
     }
+
+    //void record_sent_message(std::string message) {
+    //    m_messages.push_back(">> " + message);
+    //}
 
     friend std::ostream & operator<< (std::ostream & out, ConnectionMetadata const & data);
 private:
@@ -82,6 +87,7 @@ private:
     std::string m_uri;
     std::string m_server;
     std::string m_error_reason;
+    // I think I want to change this to have a mutex for retrieving these
     std::vector<std::string> m_messages;
 };
 
@@ -136,20 +142,20 @@ public:
         m_thread->join();
     }
 
-static context_ptr on_tls_init() {
-    // establishes a SSL connection
-    context_ptr ctx = std::make_shared<boost::asio::ssl::context>(boost::asio::ssl::context::sslv23);
+    static context_ptr on_tls_init() {
+        // establishes a SSL connection
+        context_ptr ctx = std::make_shared<boost::asio::ssl::context>(boost::asio::ssl::context::sslv23);
 
-    try {
-        ctx->set_options(boost::asio::ssl::context::default_workarounds |
+        try {
+            ctx->set_options(boost::asio::ssl::context::default_workarounds |
                          boost::asio::ssl::context::no_sslv2 |
                          boost::asio::ssl::context::no_sslv3 |
                          boost::asio::ssl::context::single_dh_use);
-    } catch (std::exception &e) {
-        std::cout << "Error in context pointer: " << e.what() << std::endl;
+        } catch (std::exception &e) {
+            std::cout << "Error in context pointer: " << e.what() << std::endl;
+        }
+        return ctx;
     }
-    return ctx;
-}
 
     int connect(std::string const & uri) {
         websocketpp::lib::error_code ec;
@@ -237,7 +243,7 @@ static context_ptr on_tls_init() {
             return;
         }
         
-        metadata_it->second->record_sent_message(message);
+        //metadata_it->second->record_sent_message(message);
     }
 
     void send_binary(int id, void const * message, size_t len) {
@@ -255,15 +261,26 @@ static context_ptr on_tls_init() {
             return;
         }
         
-        metadata_it->second->record_sent_message("binary");
+        //metadata_it->second->record_sent_message("binary");
     }
 
+    // instead of get metadata, I just want to get message, and I want a NULL pointer if I can't do this, I guess
     ConnectionMetadata::ptr get_metadata(int id) const {
         con_list::const_iterator metadata_it = m_connection_list.find(id);
         if (metadata_it == m_connection_list.end()) {
             return ConnectionMetadata::ptr();
         } else {
             return metadata_it->second;
+        }
+    }
+
+    std::vector<std::string> get_messages(int id) {
+        con_list::const_iterator metadata_it = m_connection_list.find(id);
+        if (metadata_it == m_connection_list.end()) {
+            std::vector<std::string> result;
+           return result;
+        } else {
+            return metadata_it->second->get_messages();
         }
     }
 private:

@@ -17,10 +17,13 @@
 // TODO: turn this into a class/object - the aja plugin is a nice reference
 struct deepgram_source_data {
 	obs_source_t *context;
-	obs_source_t *audio_source;
+    // the websocket object (and id) to connect to Deepgram
 	WebsocketEndpoint *endpoint;
 	int endpoint_id;
+	// the audio source (and name) to stream to Deepgram (via an audio capture callback)
+	obs_source_t *audio_source;
 	char *audio_source_name;
+	obs_source_t *text_source;
 };
 
 static const char *deepgram_source_name(void *unused)
@@ -40,17 +43,15 @@ int16_t f32_to_i16(float f) {
 	return (int16_t) f;
 }
 
-static void audio_capture(void *param, obs_source_t *source,
-			      const struct audio_data *audio_data, bool muted)
+static void audio_capture(void *param, obs_source_t *source, const struct audio_data *audio_data, bool muted)
 {
-    //blog(LOG_WARNING, "Running audio_capture.");
-
 	struct deepgram_source_data *dgsd = (deepgram_source_data *) param;
 	UNUSED_PARAMETER(source);
 
     if (audio_data != NULL) {
 		if (dgsd->endpoint != NULL) {
-			// this is assuming I guess floats for samples, but I'll need to check our audio format
+			// TODO: double check audio format
+			// TODO: mix multichannel audio together
 			uint16_t *i16_audio = (uint16_t *) malloc(audio_data->frames * sizeof(float) / 2);
 			for (int i = 0; i < audio_data->frames; i++) {
 				float sample_float;
@@ -58,15 +59,6 @@ static void audio_capture(void *param, obs_source_t *source,
 				i16_audio[i] = f32_to_i16(sample_float);
 			}
 			dgsd->endpoint->send_binary(dgsd->endpoint_id, i16_audio, audio_data->frames * sizeof(float) / 2);
-
-			// the following is for reference - I'm going to want to deal with num_channels
-			/*
-			for (size_t i = 0; i < cd->num_channels; i++) {
-				circlebuf_push_back(&cd->sidechain_data[i],
-					    audio_data->data[i],
-					    audio_data->frames * sizeof(float));
-			}
-			*/
 		}
     }
 }
@@ -78,29 +70,34 @@ static void deepgram_source_update(void *data, obs_data_t *settings)
     struct deepgram_source_data *dgsd = (deepgram_source_data *) data;
 	const char *audio_source_name = obs_data_get_string(settings, "audio_source_name");
 
+	obs_data_t *text_source_settings = obs_source_get_settings(dgsd->text_source);
+	obs_data_set_string(text_source_settings, "text", "N/A");
+
+	// if the update included a change to the selected audio source
     if (strcmp(dgsd->audio_source_name, audio_source_name) != 0) {
+		// if there is an audio source, we will remove its capture callback
+		if (dgsd->audio_source != NULL) {
+			obs_source_remove_audio_capture_callback(dgsd->audio_source, audio_capture, dgsd);
+		}
+		// if there is a websocket object present, we will remove it
         if (dgsd->endpoint != NULL) {
-            obs_source_remove_audio_capture_callback(dgsd->audio_source, audio_capture, dgsd);
-            blog(LOG_WARNING, "Going to delete the websocket connection.");
             delete dgsd->endpoint;
         }
+		// if the new selected audio source is not "none" we will set up a new websocket object and audio capture callback
         dgsd->audio_source_name = bstrdup(audio_source_name);
         if (strcmp(audio_source_name, "none") != 0) {
+			// set up the websocket object connecting to Deepgram
 			WebsocketEndpoint *endpoint = new WebsocketEndpoint();
-			blog(LOG_WARNING, "About to try to connect.");
-			int id = endpoint->connect("wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=44100&channels=1");
+			int endpoint_id = endpoint->connect("wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=44100&channels=1");
 			blog(LOG_WARNING, "I think we connected?");
 			dgsd->endpoint = endpoint;
-			dgsd->endpoint_id = id;
+			dgsd->endpoint_id = endpoint_id;
 
+			// set up the audio capture callback
             obs_source_t *audio_source = obs_get_source_by_name(audio_source_name);
             dgsd->audio_source = audio_source;
-			blog(LOG_WARNING, "About to register the audio callback.");
             obs_source_add_audio_capture_callback(audio_source, audio_capture, dgsd);
-			blog(LOG_WARNING, "Audio callback should have been registered now");
-        } else {
-			dgsd->endpoint = NULL;
-		}
+        }
     }
 }
 
@@ -112,11 +109,17 @@ static void *deepgram_source_create(obs_data_t *settings, obs_source_t *source)
 	dgsd->context = source;
     dgsd->audio_source_name = "none";
 	dgsd->endpoint = NULL;
-	deepgram_source_update(dgsd, settings);
 
+	// also grab and store info about the audio format
     //audio_output_get_info(obs_get_audio()).format;
     //audio_output_get_sample_rate(obs_get_audio());
     //audio_output_get_channels(obs_get_audio());
+
+	const char *text_source_id = "text_ft2_source\0";
+	dgsd->text_source = obs_source_create_private(text_source_id, text_source_id, settings);
+	obs_source_add_active_child(dgsd->context, dgsd->text_source);
+
+	deepgram_source_update(dgsd, settings);
 
     return(dgsd);
 }
@@ -127,13 +130,19 @@ static void deepgram_source_destroy(void *data)
 
     struct deepgram_source_data *dgsd = (deepgram_source_data *) data;
 
+	// if there is an audio source, we will remove its capture callback
+	if (dgsd->audio_source != NULL) {
+		obs_source_remove_audio_capture_callback(dgsd->audio_source, audio_capture, dgsd);
+	}
+
+	// if there is a websocket object present, we will remove it
     if (dgsd->endpoint != NULL) {
-        obs_source_remove_audio_capture_callback(dgsd->audio_source, audio_capture, dgsd);
         blog(LOG_WARNING, "Going to delete the websocket connection.");
+		// I wonder if "delete" doesn't make it NULL or something...
         delete dgsd->endpoint;
     }
 
-    //delete dgsd->endpoint;
+	// delete/free other things
     //bfree(dgsd->context);
     //bfree(dgsd->audio_source_name);
 	//bfree(dgsd);
@@ -141,6 +150,8 @@ static void deepgram_source_destroy(void *data)
 
 static void deepgram_source_render(void *data, gs_effect_t *effect)
 {
+    struct deepgram_source_data *dgsd = (deepgram_source_data *) data;	
+	obs_source_video_render(dgsd->text_source);
 }
 
 static uint32_t deepgram_source_width(void *data)
@@ -161,16 +172,19 @@ struct sources_and_parent {
 static bool add_sources(void *data, obs_source_t *source)
 {
 	struct sources_and_parent *info = (sources_and_parent *) data;
-	uint32_t caps = obs_source_get_output_flags(source);
+	uint32_t capabilities = obs_source_get_output_flags(source);
 
 	if (source == info->parent)
 		return true;
-	if ((caps & OBS_SOURCE_AUDIO) == 0)
+
+	// if this source does not have audio, return and don't allow it to be selectable
+	if ((capabilities & OBS_SOURCE_AUDIO) == 0)
 		return true;
 
+	// we will add the source name to our "list of sources" property
+	// we will use the name later to grab the source itself
 	const char *name = obs_source_get_name(source);
 	obs_property_list_add_string(info->sources, name, name);
-	blog(LOG_WARNING, name);
 
 	return true;
 }
@@ -180,25 +194,63 @@ static obs_properties_t *deepgram_source_properties(void *data)
 	blog(LOG_WARNING, "Running deepgram_source_properties.");
 
     struct deepgram_source_data *dgsd = (deepgram_source_data *) data;
-	obs_properties_t *properties = obs_properties_create();
-	obs_source_t *parent = NULL;
-	obs_property_t *property;
+	//obs_properties_t *properties = obs_properties_create();
+	// instead of starting with these text properties, try adding them later with "obs_properties_add_group"
+	obs_properties_t *properties = obs_source_properties(dgsd->text_source);
 
+	// TODO: add a drop-down for language
+
+	// TODO: add a text property for API Key
+
+	// add a drop-down to select the audio source
+	// TODO: consider what "parent" is and if I actually need it
+	obs_source_t *parent = NULL;
 	obs_property_t *sources = obs_properties_add_list(
-		properties, "audio_source_name", obs_module_text("Device"),
+		properties, "audio_source_name", obs_module_text("Audio Source"),
 		OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 	obs_property_list_add_string(sources, obs_module_text("None"), "none");
 	struct sources_and_parent info = {sources, parent};
 	obs_enum_sources(add_sources, &info);
 
-	UNUSED_PARAMETER(data);
 	return properties;
+}
+
+static void deepgram_source_tick(void *data, float seconds)
+{
+    struct deepgram_source_data *dgsd = (deepgram_source_data *) data;
+
+    //std::string message = dgsd->endpoint->get_message();
+    //std::cout << message << std::endl;
+
+	if (dgsd->endpoint != NULL) {
+		// so this part works at least
+		//ConnectionMetadata::ptr metadata = dgsd->endpoint->get_metadata(dgsd->endpoint_id);
+    	//if (metadata != NULL) {
+       	//	std::cout << *metadata << std::endl;
+		//}
+
+		std::vector<std::string> messages = dgsd->endpoint->get_messages(dgsd->endpoint_id);
+		for (auto message : messages) {
+			std::cout << message << std::endl;
+		}
+	}
+
+	obs_data_t *text_source_settings = obs_source_get_settings(dgsd->text_source);
+	obs_data_set_string(text_source_settings, "text", "N/A");
+	obs_source_update(dgsd->text_source, text_source_settings);
 }
 
 static void deepgram_source_defaults(obs_data_t *settings)
 {
 	blog(LOG_WARNING, "Running deepgram_defaults.");
 	obs_data_set_default_string(settings, "audio_source_name", "none");
+}
+
+void enum_active_sources(void *data, obs_source_enum_proc_t enum_callback, void *param)
+{
+	struct deepgram_source_data *dgsd = (deepgram_source_data *) data;
+
+	enum_callback(dgsd->context, dgsd->text_source, param);
 }
 
 struct obs_source_info deepgram_source = {
@@ -209,9 +261,11 @@ struct obs_source_info deepgram_source = {
 	.create = deepgram_source_create,
 	.destroy = deepgram_source_destroy,
 	.update = deepgram_source_update,
+	.video_tick = deepgram_source_tick,
     .video_render = deepgram_source_render,
     .get_width = deepgram_source_width,
     .get_height = deepgram_source_height,
 	.get_defaults = deepgram_source_defaults,
-	.get_properties = deepgram_source_properties
+	.get_properties = deepgram_source_properties,
+	.enum_active_sources = enum_active_sources
 };
