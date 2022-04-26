@@ -230,14 +230,18 @@ static void deepgram_source_tick(void *data, float seconds)
 		//}
 
 		std::vector<std::string> messages = dgsd->endpoint->get_messages(dgsd->endpoint_id);
+		std::string result = "";
 		for (auto message : messages) {
 			std::cout << message << std::endl;
+			result += message;
 		}
-	}
 
-	obs_data_t *text_source_settings = obs_source_get_settings(dgsd->text_source);
-	obs_data_set_string(text_source_settings, "text", "N/A");
-	obs_source_update(dgsd->text_source, text_source_settings);
+		// this works! but I'm of course updating it with "" most of the time
+		// time to parse the json, add a mutex, and clean things up
+		obs_data_t *text_source_settings = obs_source_get_settings(dgsd->text_source);
+		obs_data_set_string(text_source_settings, "text", result.c_str());
+		obs_source_update(dgsd->text_source, text_source_settings);
+	}
 }
 
 static void deepgram_source_defaults(obs_data_t *settings)
