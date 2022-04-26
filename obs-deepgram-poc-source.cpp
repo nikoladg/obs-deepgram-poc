@@ -6,6 +6,8 @@
 #include <websocketpp/common/thread.hpp>
 #include <websocketpp/common/memory.hpp>
 
+#include <nlohmann/json.hpp>
+
 #include <cstdlib>
 #include <iostream>
 #include <map>
@@ -24,6 +26,7 @@ struct deepgram_source_data {
 	obs_source_t *audio_source;
 	char *audio_source_name;
 	obs_source_t *text_source;
+	std::string transcript;
 };
 
 static const char *deepgram_source_name(void *unused)
@@ -89,7 +92,6 @@ static void deepgram_source_update(void *data, obs_data_t *settings)
 			// set up the websocket object connecting to Deepgram
 			WebsocketEndpoint *endpoint = new WebsocketEndpoint();
 			int endpoint_id = endpoint->connect("wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=44100&channels=1");
-			blog(LOG_WARNING, "I think we connected?");
 			dgsd->endpoint = endpoint;
 			dgsd->endpoint_id = endpoint_id;
 
@@ -137,8 +139,6 @@ static void deepgram_source_destroy(void *data)
 
 	// if there is a websocket object present, we will remove it
     if (dgsd->endpoint != NULL) {
-        blog(LOG_WARNING, "Going to delete the websocket connection.");
-		// I wonder if "delete" doesn't make it NULL or something...
         delete dgsd->endpoint;
     }
 
@@ -156,12 +156,14 @@ static void deepgram_source_render(void *data, gs_effect_t *effect)
 
 static uint32_t deepgram_source_width(void *data)
 {
-	return 100;
+    struct deepgram_source_data *dgsd = (deepgram_source_data *) data;	
+	return obs_source_get_width(dgsd->text_source);
 }
 
 static uint32_t deepgram_source_height(void *data)
 {
-	return 100;
+    struct deepgram_source_data *dgsd = (deepgram_source_data *) data;	
+	return obs_source_get_height(dgsd->text_source);
 }
 
 struct sources_and_parent {
@@ -219,27 +221,18 @@ static void deepgram_source_tick(void *data, float seconds)
 {
     struct deepgram_source_data *dgsd = (deepgram_source_data *) data;
 
-    //std::string message = dgsd->endpoint->get_message();
-    //std::cout << message << std::endl;
-
 	if (dgsd->endpoint != NULL) {
-		// so this part works at least
-		//ConnectionMetadata::ptr metadata = dgsd->endpoint->get_metadata(dgsd->endpoint_id);
-    	//if (metadata != NULL) {
-       	//	std::cout << *metadata << std::endl;
-		//}
-
+		// TODO: double-check JSON
 		std::vector<std::string> messages = dgsd->endpoint->get_messages(dgsd->endpoint_id);
-		std::string result = "";
 		for (auto message : messages) {
-			std::cout << message << std::endl;
-			result += message;
+			auto json_message = nlohmann::json::parse(message);
+			if (json_message["is_final"]) {
+				dgsd->transcript += json_message["channel"]["alternatives"][0]["transcript"];
+			}
 		}
 
-		// this works! but I'm of course updating it with "" most of the time
-		// time to parse the json, add a mutex, and clean things up
 		obs_data_t *text_source_settings = obs_source_get_settings(dgsd->text_source);
-		obs_data_set_string(text_source_settings, "text", result.c_str());
+		obs_data_set_string(text_source_settings, "text", dgsd->transcript.c_str());
 		obs_source_update(dgsd->text_source, text_source_settings);
 	}
 }

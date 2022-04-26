@@ -24,6 +24,7 @@ find_package(Boost REQUIRED)
 
 include_directories(
       "${CMAKE_CURRENT_SOURCE_DIR}/deps/websocketpp"
+      "${CMAKE_CURRENT_SOURCE_DIR}/deps/json/include"
       "${OPENSSL_INCLUDE_DIR}"
       "${BOOST_INCLUDEDIR}"
       )
