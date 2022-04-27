@@ -10,6 +10,10 @@
 
 #include "WebsocketEndpoint.hpp"
 
+// TODO: there are memory leaks
+
+// TODO: consider using buttons for "start" and "stop"
+
 // TODO: turn this into a class/object - the aja plugin is a nice reference
 struct deepgram_source_data {
 	obs_source_t *context;
