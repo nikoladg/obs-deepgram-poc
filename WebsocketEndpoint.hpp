@@ -135,7 +135,7 @@ public:
         return ctx;
     }
 
-    int connect(std::string const & uri) {
+    int connect(std::string const & uri, std::string const & api_key) {
         websocketpp::lib::error_code ec;
         client::connection_ptr con = m_endpoint.get_connection(uri, ec);
         if (ec) {
@@ -143,7 +143,7 @@ public:
             return -1;
         }
 
-		con->replace_header("Authorization", "Token 1eb45f404f76787f1eb8eb440505982264744776");
+		con->replace_header("Authorization", "Token " + api_key);
 
         int new_id = m_next_id++;
         ConnectionMetadata::ptr metadata_ptr = websocketpp::lib::make_shared<ConnectionMetadata>(new_id, con->get_handle(), uri);
@@ -208,8 +208,6 @@ public:
             std::cout << "> Error sending message: " << ec.message() << std::endl;
             return;
         }
-        
-        //metadata_it->second->record_sent_message(message);
     }
 
     void send_binary(int id, void const * message, size_t len) {
@@ -225,18 +223,6 @@ public:
         if (ec) {
             std::cout << "> Error sending message: " << ec.message() << std::endl;
             return;
-        }
-        
-        //metadata_it->second->record_sent_message("binary");
-    }
-
-    // instead of get metadata, I just want to get message, and I want a NULL pointer if I can't do this, I guess
-    ConnectionMetadata::ptr get_metadata(int id) const {
-        con_list::const_iterator metadata_it = m_connection_list.find(id);
-        if (metadata_it == m_connection_list.end()) {
-            return ConnectionMetadata::ptr();
-        } else {
-            return metadata_it->second;
         }
     }
 

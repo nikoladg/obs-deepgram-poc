@@ -13,6 +13,6 @@ extern struct obs_source_info deepgram_source;
 bool obs_module_load(void)
 {
         obs_register_source(&deepgram_source);
-        blog(LOG_WARNING, "Loaded Deepgram plugin.");
+        blog(LOG_INFO, "Loaded Deepgram plugin.");
         return true;
 }

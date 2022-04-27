@@ -1,11 +1,5 @@
 #include <obs-module.h>
 
-#include <websocketpp/config/asio_client.hpp>
-#include <websocketpp/client.hpp>
-
-#include <websocketpp/common/thread.hpp>
-#include <websocketpp/common/memory.hpp>
-
 #include <nlohmann/json.hpp>
 
 #include <cstdlib>
@@ -19,12 +13,14 @@
 // TODO: turn this into a class/object - the aja plugin is a nice reference
 struct deepgram_source_data {
 	obs_source_t *context;
-    // the websocket object (and id) to connect to Deepgram
+    // the websocket object, connection id, and auth info used to connect to deepgram
 	WebsocketEndpoint *endpoint;
 	int endpoint_id;
-	// the audio source (and name) to stream to Deepgram (via an audio capture callback)
+	std::string api_key;
+	// the audio source (and name) to stream to deepgram (via an audio capture callback)
 	obs_source_t *audio_source;
-	char *audio_source_name;
+	std::string audio_source_name;
+	// the text source and transcript to display in it
 	obs_source_t *text_source;
 	std::string transcript;
 };
@@ -62,26 +58,21 @@ static void audio_capture(void *param, obs_source_t *source, const struct audio_
 				i16_audio[i] = f32_to_i16(sample_float);
 			}
 			dgsd->endpoint->send_binary(dgsd->endpoint_id, i16_audio, audio_data->frames * sizeof(float) / 2);
+			free(i16_audio);
 		}
     }
 }
 
 static void deepgram_source_update(void *data, obs_data_t *settings)
 {
-	blog(LOG_WARNING, "Running deepgram_source_update.");
+	blog(LOG_INFO, "Running deepgram_source_update.");
 
     struct deepgram_source_data *dgsd = (deepgram_source_data *) data;
 	const char *audio_source_name = obs_data_get_string(settings, "audio_source_name");
-
-	obs_data_t *text_source_settings = obs_source_get_settings(dgsd->text_source);
-	obs_data_set_string(text_source_settings, "text", "WHATEVER");
-	// text_source_settings are the settings, I probably then need to get font from it
-	obs_data_t *font_obj = obs_data_get_obj(text_source_settings, "font");
-	obs_data_set_int(font_obj, "size", 256);
-	obs_source_update(dgsd->text_source, text_source_settings); // try this out
+	const char *api_key = obs_data_get_string(settings, "api_key");
 
 	// if the update included a change to the selected audio source
-    if (strcmp(dgsd->audio_source_name, audio_source_name) != 0) {
+    if (dgsd->audio_source_name != audio_source_name) {
 		// if there is an audio source, we will remove its capture callback
 		if (dgsd->audio_source != NULL) {
 			obs_source_remove_audio_capture_callback(dgsd->audio_source, audio_capture, dgsd);
@@ -90,12 +81,18 @@ static void deepgram_source_update(void *data, obs_data_t *settings)
         if (dgsd->endpoint != NULL) {
             delete dgsd->endpoint;
         }
-		// if the new selected audio source is not "none" we will set up a new websocket object and audio capture callback
-        dgsd->audio_source_name = bstrdup(audio_source_name);
-        if (strcmp(audio_source_name, "none") != 0) {
-			// set up the websocket object connecting to Deepgram
+		// if the new selected audio source is not "none"
+		// and if we have an api key,
+		// we will set up a new websocket object and audio capture callback
+        dgsd->audio_source_name = audio_source_name;
+		dgsd->api_key = api_key;
+        if (audio_source_name != "none" && api_key != "") {
+			blog(LOG_INFO, "The audio source changed and we have an API Key, so we will try to connect to Deepgram and setup an audio callback.");
+
+			// set up the websocket object connecting to deepgram
 			WebsocketEndpoint *endpoint = new WebsocketEndpoint();
-			int endpoint_id = endpoint->connect("wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=44100&channels=1");
+			// TODO: edit the url/query parameters based on the actual audio format
+			int endpoint_id = endpoint->connect("wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=44100&channels=1", api_key);
 			dgsd->endpoint = endpoint;
 			dgsd->endpoint_id = endpoint_id;
 
@@ -109,11 +106,12 @@ static void deepgram_source_update(void *data, obs_data_t *settings)
 
 static void *deepgram_source_create(obs_data_t *settings, obs_source_t *source)
 {
-	blog(LOG_WARNING, "Running deepgram_source_create.");
+	blog(LOG_INFO, "Running deepgram_source_create.");
 
 	struct deepgram_source_data *dgsd = (deepgram_source_data *) bzalloc(sizeof(struct deepgram_source_data));
 	dgsd->context = source;
     dgsd->audio_source_name = "none";
+	dgsd->api_key = "";
 	dgsd->endpoint = NULL;
 
 	// also grab and store info about the audio format
@@ -121,9 +119,17 @@ static void *deepgram_source_create(obs_data_t *settings, obs_source_t *source)
     //audio_output_get_sample_rate(obs_get_audio());
     //audio_output_get_channels(obs_get_audio());
 
+	// set up a text source as a child of our deepgram source
 	const char *text_source_id = "text_ft2_source";
 	dgsd->text_source = obs_source_create_private(text_source_id, text_source_id, settings);
 	obs_source_add_active_child(dgsd->context, dgsd->text_source);
+
+	// set up some defaults for this new text source
+	obs_data_t *text_source_settings = obs_source_get_settings(dgsd->text_source);
+	obs_data_set_string(text_source_settings, "text", "transcript...");
+	obs_data_t *font_obj = obs_data_get_obj(text_source_settings, "font");
+	obs_data_set_int(font_obj, "size", 256);
+	obs_source_update(dgsd->text_source, text_source_settings);
 
 	deepgram_source_update(dgsd, settings);
 
@@ -132,7 +138,7 @@ static void *deepgram_source_create(obs_data_t *settings, obs_source_t *source)
 
 static void deepgram_source_destroy(void *data)
 {
-	blog(LOG_WARNING, "Running deepgram_source_destroy.");
+	blog(LOG_INFO, "Running deepgram_source_destroy.");
 
     struct deepgram_source_data *dgsd = (deepgram_source_data *) data;
 
@@ -146,10 +152,11 @@ static void deepgram_source_destroy(void *data)
         delete dgsd->endpoint;
     }
 
-	// delete/free other things
-    //bfree(dgsd->context);
-    //bfree(dgsd->audio_source_name);
-	//bfree(dgsd);
+	obs_source_remove(dgsd->text_source);
+	obs_source_release(dgsd->text_source);
+	dgsd->text_source = NULL;
+
+	bfree(dgsd);
 }
 
 static void deepgram_source_render(void *data, gs_effect_t *effect)
@@ -197,7 +204,7 @@ static bool add_sources(void *data, obs_source_t *source)
 
 static obs_properties_t *deepgram_source_properties(void *data)
 {
-	blog(LOG_WARNING, "Running deepgram_source_properties.");
+	blog(LOG_INFO, "Running deepgram_source_properties.");
 
     struct deepgram_source_data *dgsd = (deepgram_source_data *) data;
 	obs_properties_t *properties = obs_properties_create();
@@ -207,7 +214,7 @@ static obs_properties_t *deepgram_source_properties(void *data)
 	// TODO: add a drop-down for language
 
 	// TODO: add a text property for API Key
-	obs_properties_add_text(properties, "dg_api_key", obs_module_text("Deepgram API Key"), OBS_TEXT_PASSWORD);
+	obs_properties_add_text(properties, "api_key", obs_module_text("Deepgram API Key"), OBS_TEXT_PASSWORD);
 
 	// add a drop-down to select the audio source
 	// TODO: consider what "parent" is and if I actually need it
@@ -250,8 +257,9 @@ static void deepgram_source_tick(void *data, float seconds)
 
 static void deepgram_source_defaults(obs_data_t *settings)
 {
-	blog(LOG_WARNING, "Running deepgram_defaults.");
+	blog(LOG_INFO, "Running deepgram_defaults.");
 	obs_data_set_default_string(settings, "audio_source_name", "none");
+	obs_data_set_default_string(settings, "api_key", "");
 }
 
 void enum_active_sources(void *data, obs_source_enum_proc_t enum_callback, void *param)
