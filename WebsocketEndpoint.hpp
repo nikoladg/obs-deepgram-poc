@@ -51,7 +51,6 @@ public:
 
     void on_message(websocketpp::connection_hdl, client::message_ptr msg) {
         if (msg->get_opcode() == websocketpp::frame::opcode::text) {
-    		blog(LOG_WARNING, "%s", msg->get_payload().c_str());
             m_messages.push_back(msg->get_payload());
         }
     }
@@ -68,18 +67,13 @@ public:
         return m_status;
     }
 
-    // wrap this in a mutex
+    // guard this with a mutex (?)
     std::vector<std::string> get_messages() {
-        std::vector<std::string> copy = m_messages;
+        std::vector<std::string> messages = m_messages;
         m_messages.clear();
-        return copy;
+        return messages;
     }
 
-    //void record_sent_message(std::string message) {
-    //    m_messages.push_back(">> " + message);
-    //}
-
-    friend std::ostream & operator<< (std::ostream & out, ConnectionMetadata const & data);
 private:
     int m_id;
     websocketpp::connection_hdl m_hdl;
@@ -87,24 +81,9 @@ private:
     std::string m_uri;
     std::string m_server;
     std::string m_error_reason;
-    // I think I want to change this to have a mutex for retrieving these
+    // add a mutex to guard this (?)
     std::vector<std::string> m_messages;
 };
-
-std::ostream & operator<< (std::ostream & out, ConnectionMetadata const & data) {
-    out << "> URI: " << data.m_uri << "\n"
-        << "> Status: " << data.m_status << "\n"
-        << "> Remote Server: " << (data.m_server.empty() ? "None Specified" : data.m_server) << "\n"
-        << "> Error/close reason: " << (data.m_error_reason.empty() ? "N/A" : data.m_error_reason) << "\n";
-    out << "> Messages Processed: (" << data.m_messages.size() << ") \n";
-
-    std::vector<std::string>::const_iterator it;
-    for (it = data.m_messages.begin(); it != data.m_messages.end(); ++it) {
-        out << *it << "\n";
-    }
-
-    return out;
-}
 
 class WebsocketEndpoint {
 public:
@@ -120,7 +99,6 @@ public:
     }
 
     ~WebsocketEndpoint() {
-        std::cout << "DESTROYING WEBSOCKET MAYBE?" << std::endl;
         m_endpoint.stop_perpetual();
         
         for (con_list::const_iterator it = m_connection_list.begin(); it != m_connection_list.end(); ++it) {
@@ -143,7 +121,7 @@ public:
     }
 
     static context_ptr on_tls_init() {
-        // establishes a SSL connection
+        // establishes an SSL connection
         context_ptr ctx = std::make_shared<boost::asio::ssl::context>(boost::asio::ssl::context::sslv23);
 
         try {
@@ -159,23 +137,13 @@ public:
 
     int connect(std::string const & uri) {
         websocketpp::lib::error_code ec;
-		blog(LOG_WARNING, "About to get connection.");
         client::connection_ptr con = m_endpoint.get_connection(uri, ec);
         if (ec) {
             std::cout << "> Connect initialization error: " << ec.message() << std::endl;
             return -1;
         }
 
-		// my guess is just I guess to do this later, right before the connect
-		bool test = con->is_server();
-		if (test) {
-			blog(LOG_WARNING, "is server");
-		} else {
-			blog(LOG_WARNING, "is not server");
-		}
-		blog(LOG_WARNING, "About to try to append some header...");
 		con->replace_header("Authorization", "Token 1eb45f404f76787f1eb8eb440505982264744776");
-		blog(LOG_WARNING, "Successfully appended header, I guess.");
 
         int new_id = m_next_id++;
         ConnectionMetadata::ptr metadata_ptr = websocketpp::lib::make_shared<ConnectionMetadata>(new_id, con->get_handle(), uri);
@@ -206,9 +174,7 @@ public:
             websocketpp::lib::placeholders::_2
         ));
 
-		blog(LOG_WARNING, "About to call the real inner connect function.");
         m_endpoint.connect(con);
-		blog(LOG_WARNING, "Done calling the real inner connect function.");
 
         return new_id;
     }

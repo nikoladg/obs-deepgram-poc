@@ -74,7 +74,11 @@ static void deepgram_source_update(void *data, obs_data_t *settings)
 	const char *audio_source_name = obs_data_get_string(settings, "audio_source_name");
 
 	obs_data_t *text_source_settings = obs_source_get_settings(dgsd->text_source);
-	obs_data_set_string(text_source_settings, "text", "N/A");
+	obs_data_set_string(text_source_settings, "text", "WHATEVER");
+	// text_source_settings are the settings, I probably then need to get font from it
+	obs_data_t *font_obj = obs_data_get_obj(text_source_settings, "font");
+	obs_data_set_int(font_obj, "size", 256);
+	obs_source_update(dgsd->text_source, text_source_settings); // try this out
 
 	// if the update included a change to the selected audio source
     if (strcmp(dgsd->audio_source_name, audio_source_name) != 0) {
@@ -117,7 +121,7 @@ static void *deepgram_source_create(obs_data_t *settings, obs_source_t *source)
     //audio_output_get_sample_rate(obs_get_audio());
     //audio_output_get_channels(obs_get_audio());
 
-	const char *text_source_id = "text_ft2_source\0";
+	const char *text_source_id = "text_ft2_source";
 	dgsd->text_source = obs_source_create_private(text_source_id, text_source_id, settings);
 	obs_source_add_active_child(dgsd->context, dgsd->text_source);
 
@@ -196,13 +200,14 @@ static obs_properties_t *deepgram_source_properties(void *data)
 	blog(LOG_WARNING, "Running deepgram_source_properties.");
 
     struct deepgram_source_data *dgsd = (deepgram_source_data *) data;
-	//obs_properties_t *properties = obs_properties_create();
+	obs_properties_t *properties = obs_properties_create();
 	// instead of starting with these text properties, try adding them later with "obs_properties_add_group"
-	obs_properties_t *properties = obs_source_properties(dgsd->text_source);
+	//obs_properties_t *properties = obs_source_properties(dgsd->text_source);
 
 	// TODO: add a drop-down for language
 
 	// TODO: add a text property for API Key
+	obs_properties_add_text(properties, "dg_api_key", obs_module_text("Deepgram API Key"), OBS_TEXT_PASSWORD);
 
 	// add a drop-down to select the audio source
 	// TODO: consider what "parent" is and if I actually need it
@@ -226,8 +231,14 @@ static void deepgram_source_tick(void *data, float seconds)
 		std::vector<std::string> messages = dgsd->endpoint->get_messages(dgsd->endpoint_id);
 		for (auto message : messages) {
 			auto json_message = nlohmann::json::parse(message);
+			std::string transcript = json_message["channel"]["alternatives"][0]["transcript"];
 			if (json_message["is_final"]) {
-				dgsd->transcript += json_message["channel"]["alternatives"][0]["transcript"];
+				if (dgsd->transcript != "" && transcript != "") {
+					dgsd->transcript += " ";
+				}
+				if (transcript != "") {
+					dgsd->transcript += transcript;
+				}
 			}
 		}
 
